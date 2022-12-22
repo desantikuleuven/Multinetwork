@@ -9,8 +9,8 @@ using DataStructures
 using StatsBase
 using Random
 
-include("C:/Workdir/Develop/Networks/PF_simulations/My_functions.jl")
-include("C:/Workdir/Develop/Networks/Hosting_Capacity/HC_functions.jl")
+include("C:/Workdir/Develop/PF_simulations/My_functions.jl")
+include("C:/Workdir/Develop/Hosting_Capacity/HC_functions.jl")
 include("My_ref/My_ref_mn_no_flex.jl")
 include("Functions/Mn_functions.jl")
 
@@ -35,7 +35,7 @@ gen_number_per_feeder = 1              # number of random DGs per feeder
 
 # Input file
 file_name = "Official_rural.m"
-file_path = "C://Workdir//Develop//Networks//"*file_name
+file_path = "C://Workdir//Develop//"*file_name
 net_data = parse_file(file_path)
 
 load_file = "Test_profiles/Load_profiles.xlsx"  #load profile file

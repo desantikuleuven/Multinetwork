@@ -12,8 +12,8 @@ using YAML
 using Dates
 using VegaLite
 
-include("C:/Workdir/Develop/Networks/PF_simulations/My_functions.jl")
-include("C:/Workdir/Develop/Networks/Hosting_Capacity/HC_functions.jl")
+include("C:/Workdir/Develop/PF_simulations/My_functions.jl")
+include("C:/Workdir/Develop/Hosting_Capacity/HC_functions.jl")
 #include("My_ref/My_ref_mn_no_flex.jl")
 include("My_ref/My_ref_mn_all_flex.jl")
 include("Functions/Mn_functions.jl")
@@ -26,7 +26,7 @@ include("Functions/Solve_daily_powerflow.jl")
 
 # Input file
 file_name = "Official_rural.m"
-file_path = "C://Workdir//Develop//Networks//"*file_name
+file_path = "C://Workdir//Develop//"*file_name
 net_data = parse_file(file_path)
 
 ######################################

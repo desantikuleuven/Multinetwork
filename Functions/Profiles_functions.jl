@@ -19,7 +19,7 @@ function get_profiles(gen_locations::Vector{String}, load_locations::Vector{Stri
 end
 
 function get_data_info()
-    RPF_result_file = "C:/Users/u0152683/Desktop/Networks/Profiles/Results_2/decision_variables_short.csv" 
+    RPF_result_file = "C:/Workdir/Develop/Profiles/Results_2/decision_variables_short.csv" 
     RPF_results = DataFrame(CSV.File(RPF_result_file))
     frequency = RPF_results.weights
     days = RPF_results.periods
