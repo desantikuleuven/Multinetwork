@@ -86,10 +86,10 @@ function solve_model(mn_net_data::Dict, model)
 end
 
 # RESULTS INTERPRETATION
-function evaluate_results(mn_net_data::Dict, result::Dict, production_hours::Vector{Int64}, threshold::Int64, feeder_ID::Dict, paths::Vector{Any})
+function evaluate_results_old(mn_net_data::Dict, result::Dict, production_hours::Vector{Int64}, threshold::Int64, feeder_ID::Dict, paths::Vector{Any})
     
     # Evaluate flexibility offered
-    load_variation, tot_load = mn_calc_flexibility_offered(mn_net_data, result)
+    load_variation, tot_load = mn_calc_flexibility_offered_old(mn_net_data, result)
     flexible_nodes = mn_calc_flexible_nodes(load_variation)
     tot_DR = calc_tot_DR(flexible_nodes)
 
@@ -116,3 +116,33 @@ function evaluate_results(mn_net_data::Dict, result::Dict, production_hours::Vec
     return flexible_nodes, tot_load, tot_DR, DG_curtailment, max_branch_loading, voltage_profile, abs_max_min_volt
 end
 
+# RESULTS INTERPRETATION
+function evaluate_results(mn_net_data::Dict, result::Dict, production_hours::Vector{Int64}, threshold::Int64, feeder_ID::Dict, paths::Vector{Any})
+    
+    # Evaluate flexibility offered
+    load_variation, tot_load = mn_calc_flexibility_offered(mn_net_data, result)
+    flexible_nodes = mn_calc_flexible_nodes(load_variation)
+    tot_DR = calc_tot_DR(flexible_nodes)
+
+    # Evaluate curtailment performed
+    DG_curtailment = mn_calc_curtailment(mn_net_data, result, production_hours)
+    DG_production = mn_calc_tot_production(mn_net_data, result)
+
+    # Compute branch flows and losses
+    flows = mn_calc_branch_flow(mn_net_data)
+    update_data!(mn_net_data, flows)
+
+    network_losses, tot_network_losses = mn_calc_power_losses(mn_net_data)
+    update_data!(mn_net_data, network_losses)
+
+    # Update mn_net_data with branch loadings and provide dict with branch loadings
+    branch_loading = mn_calc_branch_loading(mn_net_data)
+    max_branch_loading = find_max_branch_loading(branch_loading)
+
+    # Get voltage profiles 
+    voltage_profile = calc_voltage_profile(mn_net_data, result, feeder_ID, paths)
+    max_min_volt = find_max_min_voltage(voltage_profile)  #max and min voltage for each feeder for each hour
+    abs_max_min_volt = find_absolute_max_min_voltage(max_min_volt) # Find the maximum and minimu voltage for each feeder happening in the whole simulation period
+    
+    return flexible_nodes, tot_load, tot_DR, DG_curtailment, DG_production, max_branch_loading, voltage_profile, abs_max_min_volt
+end

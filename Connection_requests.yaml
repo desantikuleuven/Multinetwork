@@ -1,0 +1,61 @@
+GENERATORS:
+  # Feeder E
+  DG1:
+    P_peak: 2   # MW 
+    Q_peak: 0   # MVar
+    Connection_node : 6920
+  
+  DG2:
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6881
+  
+  DG3:
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6601
+  
+  DG10: 
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6873
+
+
+  # Feeder B
+  DG4:
+    P_peak: 4
+    Q_peak: 0
+    Connection_node : 6794
+
+  DG5:
+    P_peak: 2
+    Q_peak: 0
+    Connection_node : 6612
+  
+  # Feeder A
+  DG6:
+    P_peak: 0.5
+    Q_peak: 0
+    Connection_node : 6816
+
+  DG7:
+    P_peak: 2
+    Q_peak: 0
+    Connection_node : 6796
+  
+  DG8:
+    P_peak: 4
+    Q_peak: 0
+    Connection_node : 6835
+
+  # Feeder F  
+  DG9:
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6606
+  
+  
+
+  
+  
+  

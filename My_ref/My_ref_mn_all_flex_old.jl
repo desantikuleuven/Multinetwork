@@ -147,15 +147,20 @@ function variable_dummy(pm::AbstractPowerModel; nw::Int=nw_id_default, report::B
 
     y_p = var(pm,nw)[:y_p] = JuMP.@variable(pm.model, [i in ids(pm, nw, :load)])
     x_p = var(pm,nw)[:x_p] = JuMP.@variable(pm.model, [i in ids(pm, nw, :load)])
+    y_q = var(pm,nw)[:y_q] = JuMP.@variable(pm.model, [i in ids(pm, nw, :load)])
+    x_q = var(pm,nw)[:x_q] = JuMP.@variable(pm.model, [i in ids(pm, nw, :load)])
 
     for (i, load) in ref(pm, nw, :load)
-        JuMP.set_lower_bound(y_p[i], 0) # flexibility 
+        JuMP.set_lower_bound(y_p[i], 0) # felxibility 
         JuMP.set_lower_bound(x_p[i], 0)
+        JuMP.set_lower_bound(y_q[i], 0)
+        JuMP.set_lower_bound(x_q[i], 0)
     end
 
     report && sol_component_value(pm, nw, :load, :x_p, ids(pm, nw, :load), x_p)
+    report && sol_component_value(pm, nw, :load, :x_q, ids(pm, nw, :load), x_q)
     report && sol_component_value(pm, nw, :load, :y_p, ids(pm, nw, :load), y_p)
-    
+    report && sol_component_value(pm, nw, :load, :y_q, ids(pm, nw, :load), y_q)
 
 end
 
@@ -167,9 +172,10 @@ function objective_min_load_gen_variations(pm::AbstractPowerModel; nw = nw_id_de
     return JuMP.@objective(pm.model, Min, 
         sum(
             sum(gen["pg"]-var(pm,nw, :pg, i) for (i,gen) in ref(pm, nw, :gen) if i!=1) +
-            sum(var(pm,nw, :x_p, i) + var(pm,nw, :y_p, i) for i in ids(pm, nw, :load)) 
-            for (nw, network) in nws(pm)
-        )
+            sum(gen["qg"]-var(pm,nw, :qg, i) for (i,gen) in ref(pm, nw, :gen) if i!=1) +
+            sum(var(pm,nw, :x_p, i) + var(pm,nw, :y_p, i) for i in ids(pm, nw, :load)) + 
+            sum(var(pm,nw, :x_q, i) + var(pm,nw, :y_q, i) for i in ids(pm, nw, :load))
+            for (nw, network) in nws(pm))
     )
 end
 
@@ -280,6 +286,7 @@ end
 function constraint_voltage_magnitude_upper_me(pm::AbstractPowerModel, i::Int; nw::Int=nw_id_default)
     bus = ref(pm, nw, :bus, i)
     v_max = bus["vmax"]
+    #v_max = 1.2
 
     v = var(pm, nw, :vm, i)
     JuMP.@constraint(pm.model, v <= v_max)
@@ -289,6 +296,8 @@ end
 function constraint_voltage_magnitude_lower_me(pm::AbstractPowerModel, i::Int; nw::Int=nw_id_default)
     bus = ref(pm, nw, :bus, i)
     v_min = bus["vmin"]
+    #v_min = 0.8
+   
 
     v = var(pm, nw, :vm, i)
     JuMP.@constraint(pm.model, v_min <= v)
@@ -314,13 +323,20 @@ function constraint_dummy(pm::AbstractPowerModel, i::Int; nw::Int=nw_id_default)
     
     load = ref(pm,nw,:load,i)
     load_p = get(var(pm, nw), :load_p, Dict())
+    load_q = get(var(pm, nw), :load_q, Dict())
     y_p = get(var(pm,nw), :y_p, Dict())
     x_p = get(var(pm,nw), :x_p, Dict())
+    y_q = get(var(pm,nw), :y_q, Dict())
+    x_q = get(var(pm,nw), :x_q, Dict())
 
     p = load["pd"]
     p_flex = load_p[i]
     JuMP.@constraint(pm.model, p - p_flex <= y_p[i])
     JuMP.@constraint(pm.model, p_flex - p <= x_p[i])
-    
+
+    q = load["qd"]
+    q_flex = load_q[i]
+    JuMP.@constraint(pm.model, q - q_flex <= y_q[i])
+    JuMP.@constraint(pm.model, q_flex - q <= x_q[i])
 end
 

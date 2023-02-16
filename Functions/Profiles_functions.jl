@@ -4,22 +4,24 @@ using VegaLite
 
 # Main function to retrieve all profiles
 function get_profiles(gen_locations::Vector{String}, load_locations::Vector{String})
+    dir = "C:/Workdir/Develop/Profiles/Results_10/decision_variables_short.csv" 
     # Gen profiles
-    pv_profiles = tuple((get_pv_profiles(pv_location) for pv_location in gen_locations)...)  # Get a tuple of Dicts, each dict is a PV profile in a different location 
+    pv_profiles = tuple((get_pv_profiles(pv_location, dir) for pv_location in gen_locations)...)  # Get a tuple of Dicts, each dict is a PV profile in a different location 
     pv_profile_key = Dict(loc => loc_id for (loc_id,loc) in enumerate(gen_locations))
 
     # Load profiles
-    load_profiles = tuple((get_load_profiles(demand_location) for demand_location in load_locations)...)  # Get a tuple of Dicts, each dict is a load profile in a different location 
+    load_profiles = tuple((get_load_profiles(demand_location, dir) for demand_location in load_locations)...)  # Get a tuple of Dicts, each dict is a load profile in a different location 
     load_profile_key = Dict(loc => loc_id for (loc_id,loc) in enumerate(load_locations))
 
-    frequency, days = get_data_info()
+    frequency, days = get_data_info(dir)
     frequency_of_occurance = Dict( d => f for (d,f) in zip(days,frequency))
 
     return pv_profiles, pv_profile_key, load_profiles, load_profile_key, frequency_of_occurance
 end
 
-function get_data_info()
-    RPF_result_file = "C:/Workdir/Develop/Profiles/Results_2/decision_variables_short.csv" 
+function get_data_info(file::String)
+    #RPF_result_file = "C:/Workdir/Develop/Profiles/Results_30/decision_variables_short.csv" 
+    RPF_result_file = file
     RPF_results = DataFrame(CSV.File(RPF_result_file))
     frequency = RPF_results.weights
     days = RPF_results.periods
@@ -27,10 +29,11 @@ function get_data_info()
 end
 
 # Pass all pv profiles to main
-function get_pv_profiles(pv_loc::String)
+function get_pv_profiles(pv_loc::String, file::String)
 
     pv_profile_file_path = "C:/Workdir/Develop/Profiles/PVGIS/PV_profile_2008_"*pv_loc*".json"  # PV generation profile file
-    RPF_result_file = "C:/Workdir/Develop/Profiles/Results_2/decision_variables_short.csv"
+    #RPF_result_file = "C:/Workdir/Develop/Profiles/Results_30/decision_variables_short.csv"
+    RPF_result_file = file
     RPF_results = DataFrame(CSV.File(RPF_result_file))
     
     return retrieve_pv_profiles(RPF_results, pv_profile_file_path)#, RPF_results.weights
@@ -61,10 +64,11 @@ function retrieve_pv_profiles(RPF_results::DataFrame, file_path::String)
 end
 
 # Pass all load profiles to main
-function get_load_profiles(load_loc::String)
+function get_load_profiles(load_loc::String, file::String)
 
     load_profile_file_path = "C:/Workdir/Develop/Profiles/Load/Load_profile_"*load_loc*".csv"  # PV generation profile file
-    RPF_result_file = "C:/Workdir/Develop/Profiles/Results_2/decision_variables_short.csv"
+    #RPF_result_file = "C:/Workdir/Develop/Profiles/Results_30/decision_variables_short.csv"
+    RPF_result_file = file
     RPF_results = DataFrame(CSV.File(RPF_result_file))
     
     return retrieve_load_profiles(RPF_results, load_profile_file_path)# RPF_results.weights
@@ -142,7 +146,7 @@ function attribute_gen_profile_values(data::Dict, gen_prof::Tuple, pv_profile_ke
                 key = replace(gen["gen_profile"], "PV_profile_" => "")
                 idx = pv_profile_key[key]
                 data["nw"][n]["gen"][i]["pg"] = gen["p_nominal"] * gen_prof[idx][!,"PV_Profile_$r_day"][h]
-                data["nw"][n]["gen"][i]["qg"] = gen["p_nominal"] * gen_prof[idx][!,"PV_Profile_$r_day"][h]
+                data["nw"][n]["gen"][i]["qg"] = gen["q_nominal"] * gen_prof[idx][!,"PV_Profile_$r_day"][h]
 
                 data["nw"][n]["gen"][i]["pg_ref"] = data["nw"][n]["gen"][i]["pg"]  # used as reference value for curtailment evaluation
                 data["nw"][n]["gen"][i]["qg_ref"] = data["nw"][n]["gen"][i]["qg"]
@@ -318,150 +322,7 @@ function plot_gen_profile(data::DataFrame, aggregate::Bool, save_plot::Bool)
 end
 
 
-# Print stuff
-function hourly_printing_statements(result::Dict, data::Dict, flexible_nodes::OrderedDict, tot_load::OrderedDict, DG_curtailment::Dict, max_branch_loading::OrderedDict, abs_max_min_volt::Dict)
-
-    #print status for each hour
-    for (nwid, net) in sort(data["nw"])
-
-        h = string(parse(Int64,nwid)-1) # Nwid in reality is 1 hour in advance (eg nwid = 13 means hour = 12:00)
-
-        println("\n\nNETWORK SOLUTION AT TIME STEP: ", h,"\n\n")
-        print_tot_generation(result["solution"]["nw"][nwid], DG_curtailment[h])
-        print_tot_load(net, tot_load[h])
-        print_flex_offered(flexible_nodes[h])
-        print_max_branch_load(max_branch_loading)
-        print_max_min_volt(abs_max_min_volt)
-
-    end
-        
-end
-
-function print_max_branch_load(max_branch_loading::OrderedDict)
-    b_max, nw = findmax(collect(values(max_branch_loading)))
-    nw = collect(keys(max_branch_loading))[nw]
-    println( "Maximum branch loading: $b_max at hour $nw")
-end
-
-function print_max_min_volt(abs_max_min_volt::Dict)
-    d = abs_max_min_volt
-    feeder_v_min = reduce((x, y) -> d[x]["vmin"] ≤ d[y]["vmin"] ? x : y, keys(d))
-    feeder_v_max = reduce((x, y) -> d[x]["vmax"] >= d[y]["vmax"] ? x : y, keys(d))
-    
-    println("Feeder $feeder_v_min: V min = ",d[feeder_v_min]["vmin"]," at ",d[feeder_v_min]["hour_vmin"])
-    println("Feeder $feeder_v_max: V max = ",d[feeder_v_min]["vmax"]," at ",d[feeder_v_min]["hour_vmax"])
-end
-    
 
 
-# Calc total flexibility offered in each hour
-function calc_tot_DR(flexible_nodes::OrderedDict)
 
-    tot_flex = Dict{String, Any}(i=> Dict() for i in keys(flexible_nodes))
-
-    for (nwid, bus) in flexible_nodes
-        try
-            p_flex_up = round(sum([node["diff_real"] for (nodeid,node) in bus if node["diff_real"]>0]), digits= 5)
-            q_flex_up = round(sum([node["diff_imm"] for (nodeid,node) in bus if node["diff_imm"]>0]), digits= 5)
-
-            tot_flex[nwid]["p_flex_up"] = p_flex_up
-            tot_flex[nwid]["q_flex_up"] = q_flex_up
-
-        catch e
-            tot_flex[nwid]["p_flex_up"] = 0
-            tot_flex[nwid]["q_flex_up"] = 0
-        end
-        # Downwards demand flexibility
-        try
-            p_flex_dwn = round(sum([node["diff_real"] for (nodeid,node) in bus if node["diff_real"]<0]), digits= 5)
-            q_flex_dwn = round(sum([node["diff_imm"] for (nodeid,node) in bus if node["diff_imm"]<0]), digits= 5)
-            
-            tot_flex[nwid]["p_flex_dwn"] = p_flex_dwn
-            tot_flex[nwid]["q_flex_dwn"] = q_flex_dwn
-            
-        catch e 
-            tot_flex[nwid]["p_flex_dwn"] = 0
-            tot_flex[nwid]["q_flex_dwn"] = 0
-        end
-    end
-
-    return tot_flex
-end
-
-function print_flex_offered(flexible_nodes::Dict)
-
-    println("FLEXIBILITY\n")
-
-    if !isempty(flexible_nodes) 
-        # Upwards demand flexibility
-        try
-            p_flex_up = round(sum([node["diff_real"] for (nodeid,node) in flexible_nodes if node["diff_real"]>0]), digits= 5)
-            q_flex_up = round(sum([node["diff_imm"] for (nodeid,node) in flexible_nodes if node["diff_imm"]>0]), digits= 5)
-
-            println("Total active upwards power demand flexibility contracted: ", p_flex_up, " MW") 
-            println("Total reactive upwards power demand flexibility contracted: ", q_flex_up, " MVar")
-
-        catch e
-            println("No upwards flexibility used")
-        end
-
-
-        # Downwards demand flexibility
-        try
-            p_flex_dwn = round(sum([node["diff_real"] for (nodeid,node) in flexible_nodes if node["diff_real"]<0]), digits= 5)
-            q_flex_dwn = round(sum([node["diff_imm"] for (nodeid,node) in flexible_nodes if node["diff_imm"]<0]), digits= 5)
-            
-            println("Total active downwards power demand flexibility contracted: ", p_flex_dwn, " MW") 
-            println("Total reactive downwards power demand flexibility contracted: ", q_flex_dwn, " MVar")
-            
-        catch e 
-            print("No downwards flexibility used")
-        end
-     
-        
-    end
-end
-
-function print_tot_load(net::Dict, tot_final_load)
-
-    println("LOAD\n")
-    p_load_nominal = round(sum([load["pd"] for (load_id,load) in net["load"]]), digits = 5)
-    q_load_nominal = round(sum([load["qd"] for (load_id,load) in net["load"]]), digits = 5)
-
-    println("Nominal active demand: ", p_load_nominal," MW")
-    println("Nominal active demand: ", q_load_nominal," MVar")
-    println()
-    println("Final total active demand: ", round(tot_final_load["p_demand"], digits = 5)," MW")
-    println("Final total reactive demand: ", round(tot_final_load["q_demand"], digits = 5)," MVar")
-    println()
-end
-
-function print_tot_generation(result::Dict, dg_curt::Dict)
-
-    println("GENERATION\n")
-    println("Active power provided from slack bus: ", round(result["gen"]["1"]["pg"],digits = 5), "MW")
-    println("Reactive power provided from slack bus: ", round(result["gen"]["1"]["qg"],digits = 5), "MVar")
-    println()
-    if length(result["gen"])>1
-        DG_p = round(sum([dg["pg"] for (dg_id, dg) in result["gen"] if dg_id != "1"]), digits = 5)
-        DG_q = round(sum([dg["qg"] for (dg_id, dg) in result["gen"] if dg_id != "1"]), digits = 5)
-        println("Total active power generation from DGs: ",DG_p, " MW")
-        println("Total reactive power generation from DGs: ",DG_q, " MVar")
-
-        if !isempty(dg_curt)
-            tot_p_curt = round(sum(values["curtail_abs"] for (x,values) in dg_curt), digits = 5)
-            println("Total curtailed active power: ", tot_p_curt)
-        end
-    end
-
-end
-
-function update_summary(summary::Dict, result::Dict, mn_net_data::Dict, tot_DR::Dict)
-
-    summary["OF"] = result["objective"]
-    summary["Curtailment"] = sum(sum(get(gen,"curtail_abs",0) for (gen_id,gen) in data["gen"]) for (nwid,data) in mn_net_data["nw"])  #total curtailment
-    summary["Up_flex"] = sum(flex["p_flex_up"] for (hour,flex) in tot_DR)
-    summary["Down_flex"] = sum(flex["p_flex_dwn"] for (hour,flex) in tot_DR)
-
-end
 

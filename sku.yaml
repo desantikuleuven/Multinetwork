@@ -1,0 +1,33 @@
+GENERATORS:
+  # Feeder E
+  DG1:
+    P_peak: 2   # MW 
+    Q_peak: 0   # MVar
+    Connection_node : 6920
+  
+  DG2:
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6881
+  
+  DG3:
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6601
+  
+  DG4: 
+    P_peak: 3
+    Q_peak: 0
+    Connection_node : 6873
+  
+#  DG5:
+#    P_peak: 2.5
+#    Q_peak: 0
+#    Connection_node : 6891
+  
+#  DG6:
+#    P_peak: 1.5
+#    Q_peak: 0
+#    Connection_node : 6613
+  
+  

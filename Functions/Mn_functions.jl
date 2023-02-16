@@ -4,6 +4,7 @@ using JSON
 using DataStructures
 using Dates
 using PowerPlots
+using PowerPlots.Experimental
 using ColorSchemes
 using Plots
 
@@ -21,6 +22,9 @@ function assign_load_profile(data::Dict, load_file::String)
             k = parse(Int64,n)
             data["nw"][n]["load"][i]["pd"] = load["pd"] * load_profiles[load["load_profile"]][k]
             data["nw"][n]["load"][i]["qd"] = load["qd"] * load_profiles[load["load_profile"]][k]
+
+            data["nw"][n]["load"][i]["pd_ref"] = data["nw"][n]["load"][i]["pd"]
+            data["nw"][n]["load"][i]["qd_ref"] = data["nw"][n]["load"][i]["qd"]
         end
     end
 
@@ -51,6 +55,114 @@ function choose_load_profiles(data::Dict, load_file::String; seed_value::Int)
         data["load"][i]["load_profile"] = sample(collect(keys(load_profiles)),1)[1]
     end
 
+end
+
+# Same function as calc_voltage_profile but without showing voltage profiles, needed just to get feeders info
+function get_feeder_data(net_data::Dict, file_name)
+    
+    # INPUT FOR PATH CALC
+
+    down_node, g, map = downstreamcalcs(net_data)
+
+    extremes = []
+    [push!(extremes, i) for (i,j) in down_node if j ==[]]
+
+    tot_paths = [Tuple[]]
+    dist = AbstractFloat[]
+
+    len = Dict((map[j["from_b"]],map[j["to_b"]]) => j["length"] for (ind,j) in net_data["distance"])
+
+    inv_map = inverse_map(net_data)
+    node_dist = []
+
+    tot_paths, dist, node_dist = paths_calc(g, extremes, len, dist, tot_paths, inv_map, file_name, node_dist)
+
+    paths = []
+    feeders = []
+
+    mv_busbar = 0
+
+    #COUNT NUMBEER OF FEEDERS
+    for (path,line) in enumerate(tot_paths)
+    
+        if line[1][2]!=1 && line[1][2] ∉ feeders
+            push!(feeders, line[1][2])
+        end
+    end
+
+    # CREATE DICT CONTAINING ALL DATA RELEVANT FOR FEEDERS
+    alphabet = 'A':'Z'
+    feeder_ID = Dict( j => Dict("Name" => "Feeder $i", "Paths" => [], "Paths_ID" => [], "Paths_distance"=> []) for (i,j) in zip('A':alphabet[length(feeders)], feeders) )
+
+    # Write tot_paths in a vectorial way. 
+    for vec in tot_paths
+
+        feed = []
+        for j in 1:length(vec)
+
+            push!(feed,vec[j][1])
+            
+        end
+    
+        push!(paths,feed)  #Rewrite how paths are made
+
+    end
+
+    for (idx,path) in enumerate(paths)
+
+        if path[end]!=1 && path[2] in keys(feeder_ID)
+            push!(feeder_ID[path[2]]["Paths"], path)
+            push!(feeder_ID[path[2]]["Paths_ID"], idx)
+            push!(feeder_ID[path[2]]["Paths_distance"], node_dist[idx])
+        end
+
+    end
+    
+    # Add ID of branches belonging to the same feeder
+
+    for (ref, data) in feeder_ID
+
+        branches = []
+    
+        for path in feeder_ID[ref]["Paths"]
+            
+            for (ind,j) in enumerate(path)
+        
+                if ind<length(path)
+        
+                    t_bus = path[ind]
+                    f_bus = path[ind+1]
+        
+                    for (idx,branch) in net_data["branch"]
+        
+                        if f_bus == branch["f_bus"] && t_bus == branch["t_bus"]
+                            if idx ∉ branches
+                                push!(branches,idx)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    
+        feeder_ID[ref]["Branches"] = branches
+    
+    end
+    
+    # Add ID of bus belonging to the same feeder
+    for (ref, data) in feeder_ID
+
+        nodes = []
+
+        for path in feeder_ID[ref]["Paths"]
+            [push!(nodes, bus) for bus in path if bus ∉ nodes]
+        end
+
+        feeder_ID[ref]["Buses"] = nodes
+        mv_busbar = nodes[1]
+    end
+
+    return feeder_ID, mv_busbar
 end
 
 # Assign the generation profile to each generator in the multinetwork network 
@@ -269,7 +381,7 @@ function calc_daily_data(daily_profile::OrderedDict)
 end
 
 # Computes loading of each branch in each multinetwork (adding it to net_data) 
-function mn_calc_branch_loading(data::Dict, congestion_limit)
+function mn_calc_branch_loading(data::Dict; congestion_limit::Float64=0.0)
 
 
     for (nwid,net) in data["nw"]
@@ -306,7 +418,7 @@ function find_max_branch_loading(branch_loading::Dict)
         loadings = collect(values(branches))
         loading_max = maximum(loadings)
 
-        relevant_dict[string(parse(Int64,nwid)-1)] = loading_max
+        relevant_dict[nwid] = loading_max
 
     end
 
@@ -315,7 +427,7 @@ function find_max_branch_loading(branch_loading::Dict)
 end
 
 # Compute the flexibility offered by each node for each stage of the multinetwork
-function mn_calc_flexibility_offered(data::Dict, result::Dict)
+function mn_calc_flexibility_offered_old(data::Dict, result::Dict)
 
     n = parse.(Int64,keys(data["nw"])).-1
 
@@ -413,6 +525,98 @@ function mn_calc_flexibility_offered(data::Dict, result::Dict)
 
 end
 
+# Compute the flexibility offered by each node for each stage of the multinetwork
+function mn_calc_flexibility_offered(data::Dict, result::Dict)
+
+    n = parse.(Int64,keys(data["nw"])).-1
+
+    flex_loads = OrderedDict{String, Dict}(string(h) => Dict() for h in n)
+    tot_load = OrderedDict{String, Dict}(string(h) => Dict() for h in n)
+
+    for (nwid, net) in sort(data["nw"])
+
+        hour = string(parse(Int64,nwid)-1)
+
+        p_load_actual = sum([load["load_p"] for (x,load) in result["solution"]["nw"][nwid]["load"]])
+        q_load_actual = sum([load["load_q"] for (x,load) in result["solution"]["nw"][nwid]["load"]])
+
+        p_load_nominal = sum([load["pd"] for (x,load) in data["nw"][nwid]["load"]])
+        q_load_nominal = sum([load["qd"] for (x,load) in data["nw"][nwid]["load"]])
+
+        for (i,load) in result["solution"]["nw"][nwid]["load"]
+
+            p_nominal = net["load"][i]["pd"]
+            q_nominal = net["load"][i]["qd"]
+
+            tanφ = tan(acos(p_nominal/sqrt(p_nominal^2+q_nominal^2)))
+    
+            bus_id = string(net["load"][i]["load_bus"])
+            flex_loads[hour][bus_id] = Dict("diff_real" => 0.0, "flex_p" => 0.0, "diff_imm" => 0.0, "flex_q" => 0.0)
+    
+            data["nw"][nwid]["bus"][bus_id]["p_flex"] = 0
+            data["nw"][nwid]["bus"][bus_id]["q_flex"] = 0
+            data["nw"][nwid]["bus"][bus_id]["flex_type"] = "None"
+            
+            x_p = load["x_p"]
+            y_p = load["y_p"]
+    
+            if x_p > 10^-6  # upwards active flexibiility 
+    
+                flex_loads[hour][bus_id]["diff_real"] = x_p
+                flex_loads[hour][bus_id]["flex_p"] = round(x_p/p_nominal, digits = 3)*100
+
+                flex_loads[hour][bus_id]["diff_imm"] = x_p* tanφ
+                flex_loads[hour][bus_id]["flex_q"] = round(x_p* tanφ/q_nominal, digits = 3)*100
+    
+                data["nw"][nwid]["bus"][bus_id]["p_flex"] = flex_loads[hour][bus_id]["flex_p"]
+                data["nw"][nwid]["bus"][bus_id]["flex_type"] = "Upward"
+                data["nw"][nwid]["bus"][bus_id]["q_flex"] = flex_loads[hour][bus_id]["flex_q"]
+                
+            
+            elseif y_p > 10^-6
+    
+                flex_loads[hour][bus_id]["diff_real"] = - y_p 
+                flex_loads[hour][bus_id]["flex_p"] = - round(y_p/p_nominal, digits = 3)*100
+
+                flex_loads[hour][bus_id]["diff_imm"] = - y_p * tanφ
+                flex_loads[hour][bus_id]["flex_q"] = - round(y_p * tanφ/q_nominal, digits = 3)*100
+    
+                data["nw"][nwid]["bus"][bus_id]["p_flex"] = flex_loads[hour][bus_id]["flex_p"]
+                data["nw"][nwid]["bus"][bus_id]["flex_type"] = "Downward"
+                data["nw"][nwid]["bus"][bus_id]["q_flex"] = flex_loads[hour][bus_id]["flex_q"]
+            end
+            
+            v = []
+            [push!(v,string(load["load_bus"])) for (ID,load) in data["nw"][nwid]["load"]]
+            b = collect(keys(data["nw"][nwid]["bus"]))
+            miss = findall(x->x==0, in(v).(b))
+            if !isempty(b[miss])
+                for idx in b[miss]
+    
+                    flex_loads[hour][idx] = Dict(
+                        "diff_real" => 0.0,
+                        "diff_imm" => 0.0,
+                        "flex_p" => 0,
+                        "flex_q" => 0,
+                    )
+                    data["nw"][nwid]["bus"][idx]["p_flex"] = 0
+                    data["nw"][nwid]["bus"][idx]["q_flex"] = 0
+                end
+            end
+    
+        end
+
+        tot_load[hour]["p_demand_actual"] = p_load_actual
+        tot_load[hour]["q_demand_actual"] = q_load_actual
+        tot_load[hour]["p_demand_nominal"] = p_load_nominal
+        tot_load[hour]["q_demand_nominal"] = q_load_nominal
+    end
+
+
+    return flex_loads, tot_load
+
+end
+
 # Branch flows in each stage of multinetwork 
 function mn_calc_branch_flow(data::Dict)
     pm_data = get_pm_data(data)
@@ -475,7 +679,7 @@ function mn_calc_power_losses(data::Dict)
     end
  
  
-    return Dict("nw"=>branch_network_losses), tot_network_losses
+    return Dict("nw"=>branch_network_losses, "per_unit" => true), tot_network_losses
  
 end
 
@@ -629,7 +833,7 @@ function calc_voltage_profile(data::Dict, result::Dict, feeder_info::Dict, paths
             feeder_info[id]["ciao"] = []
         end
 
-        push!(voltage_profile, nwid => mock)
+        push!(voltage_profile, string(parse(Int64,nwid)-1) => mock)
 
     end
 
@@ -787,6 +991,40 @@ function print_tot_generation(result::Dict, dg_curt::Dict)
 
 end
 
+# Print hourly statements with multiple representative days 
+function hourly_printing_statements(result::Dict, data::Dict, flexible_nodes::OrderedDict, tot_load::OrderedDict, DG_curtailment::Dict, max_branch_loading::OrderedDict, abs_max_min_volt::Dict)
+
+    #print status for each hour
+    for (nwid, net) in sort(data["nw"])
+
+        h = string(parse(Int64,nwid)-1) # Nwid in reality is 1 hour in advance (eg nwid = 13 means hour = 12:00)
+
+        println("\n\nNETWORK SOLUTION AT TIME STEP: ", h,"\n\n")
+        print_tot_generation(result["solution"]["nw"][nwid], DG_curtailment[h])
+        print_tot_load(net, tot_load[h])
+        print_flex_offered(flexible_nodes[h])
+        print_max_branch_load(max_branch_loading)
+        print_max_min_volt(abs_max_min_volt)
+
+    end
+        
+end
+
+function print_max_branch_load(max_branch_loading::OrderedDict)
+    b_max, nw = findmax(collect(values(max_branch_loading)))
+    nw = collect(keys(max_branch_loading))[nw]
+    println( "Maximum branch loading: $b_max at hour $nw")
+end
+
+function print_max_min_volt(abs_max_min_volt::Dict)
+    d = abs_max_min_volt
+    feeder_v_min = reduce((x, y) -> d[x]["vmin"] ≤ d[y]["vmin"] ? x : y, keys(d))
+    feeder_v_max = reduce((x, y) -> d[x]["vmax"] >= d[y]["vmax"] ? x : y, keys(d))
+    
+    println("Feeder $feeder_v_min: V min = ",d[feeder_v_min]["vmin"]," at ",d[feeder_v_min]["hour_vmin"])
+    println("Feeder $feeder_v_max: V max = ",d[feeder_v_min]["vmax"]," at ",d[feeder_v_min]["hour_vmax"])
+end
+
 # Struct needed to plot only one label when plotting multiple function
 
 struct onlyone <: AbstractMatrix{Bool}
@@ -871,7 +1109,7 @@ function mn_plot_united_feeder_voltage_profile(voltage_profile::Dict, feeder_ID:
 
         y = []
         
-        my_colors = colorschemes[:tableau_20]  # select colors 
+        my_colors = get(ColorSchemes.tableau_20, LinRange(0,1,24))  # select colors 
     
         for (nwid, n_profile) in sort(profiles_per_net)  # y is a multimatrix containing the values of the voltage in each multinetwork 
     
@@ -933,6 +1171,134 @@ function mn_plot_united_feeder_voltage_profile(voltage_profile::Dict, feeder_ID:
 
 end
 
+# Plot the voltage deviation in all feeders along the day. In type you can specify either "boxplot", "dotted area", "errorband"
+function mn_plot_voltage_variation(feeder_ID::Dict, voltage_profile::Dict,r_day::Int64, type::String)
+
+    feeder_profile = OrderedDict{Int64,Dict}()
+    # Convert the voltage profile as a dict with feeder => hour => voltage profile 
+    for (f_id,x) in feeder_ID
+        feeder_profile[f_id] = Dict()
+        for (nwid, data_stored) in voltage_profile
+            push!(feeder_profile[f_id], parse(Int64,nwid) => data_stored[f_id])
+        end
+    end   
+
+    daily_feeder_profile = Dict{Int64,Dict{Int64,Any}}(f_id => Dict() for f_id in keys(feeder_ID))
+
+    df = DataFrame(voltage_profile =[], feeder_name = [], hour =[])
+
+    # Create a dataframe where for each hour we specify the voltage value of all nodes in each feeder 
+    for f_id in keys(feeder_ID)
+
+        for hour in parse.(Int64, keys(voltage_profile))
+
+            a = Dict{String,Float64}()
+            # Needed to assign just one voltage magnitude value to the distance 
+            for (dist, volt) in zip(reduce(vcat,feeder_ID[f_id]["Paths_distance"]),reduce(vcat,feeder_profile[f_id][hour]))
+                a["$dist"] = volt
+            end
+
+            push!(daily_feeder_profile[f_id], hour => a)
+            append!(df[!, "voltage_profile"], collect(values(a)))
+            append!(df[!, "feeder_name"] , reduce(vcat, [feeder_ID[f_id]["Name"] for i in 1:length(collect(values(a)))]))
+            append!(df[!, "hour"] , Int.(ones(length(collect(values(a))))*hour))
+        end
+
+    end
+
+    if type == "errorband"
+        
+        df |> 
+        @vlplot(x = {
+            :hour
+        },
+        ) +
+        @vlplot(
+            title = {text = "Voltage variation on day $r_day"},
+            mark = {:errorband, extent =:ci},
+            width = 1000, height = 600,
+            y = {
+                :voltage_profile,
+                type = "quantitative",
+                scale= {zero = false},
+                title = "Voltage (p.u.)",
+            },
+            color = {
+                :feeder_name,
+                legend = {title = "Feeders profile"},
+            },
+        ) +
+        @vlplot(
+            :line,
+            title = {text = "Voltage variation on day $r_day"},
+            y = {
+                "mean(voltage_profile)",
+                type = :quantitative,
+            },
+            color = {
+                :feeder_name,
+                legend = {title = "Feeders profile"},
+            },
+        ) |> display
+
+    elseif type == "dotted area"
+    
+        df |> 
+        @vlplot(x = {
+            :hour
+        },
+        ) +
+        @vlplot(
+            title = {text = "Voltage variation on day $r_day"},
+            width = 1000, height = 600,
+            mark={:point,opacity=0.3},
+            y = {
+                "voltage_profile:q",
+                scale= {domain = [0.9, 1.1]},
+                title = "Voltage (p.u.)",
+            },
+            color = {
+                :feeder_name,
+                legend = {title = "Feeders profile"},
+            },
+        )  + 
+        @vlplot(
+            :line,
+            title = {text = "Voltage variation on day $r_day"},
+            y = {
+                "mean(voltage_profile)",
+                title = "Voltage (p.u.)",
+            },
+            color = {
+                :feeder_name,
+                legend = {title = "Feeders profile"},
+            },
+            
+        ) |> display
+
+    elseif type == "boxplot"
+        
+        df |>
+        @vlplot(
+            title = {text = "Voltage variation on day $r_day"},
+            width = 1000, height = 600,
+            mark={:boxplot, extent="min-max"},
+            x="hour:o",
+            y={
+                "voltage_profile:q",
+                scale= {domain = [0.9, 1.1]},
+                title = "Voltage (p.u.)",
+            },
+            color = {
+                :feeder_name,
+                legend = {title = "Feeders profile"},
+            },
+        ) |> display
+
+    end
+
+end
+
 # These two functions can be used in case you want to get the value of voltage mapped with the distance
 function assign_distance_to_voltage(feed_ID::Dict, volt_profile::Dict, nwid::String, f_id::Int64)
    
@@ -968,6 +1334,41 @@ function get_distance_to_voltage_profile(v_profile::Dict, feed_ID::Dict)
     return unique_profile
     
 end
+
+function add_corall_prop(net_data::Dict, nwid::String)
+
+    file_name = net_data["name"]
+    file_name  = "Official_"*split(file_name, "_")[2]*".m"
+
+    net_data = net_data["nw"][nwid]
+    
+    feeder_ID_1, mv_busbar = get_feeder_data(net_data, file_name)
+    title  = replace(file_name, "Official_"=>"")
+    title = uppercasefirst(replace(title,".m" =>""))
+
+    for (k, feeder) in feeder_ID_1
+        for (id, branch) in net_data["branch"]
+            if id in feeder["Branches"]
+                net_data["branch"][id]["feeder"] = feeder["Name"]
+            end
+        end
+        for (idx, bus) in net_data["bus"]
+            if parse(Int64,idx) in feeder["Buses"][2:end]
+                net_data["bus"][idx]["feeder"] = feeder["Name"]
+            end
+        end
+    
+    end
+    
+    [net_data["branch"][id]["feeder"] = "HV/MV" for (id,branch) in net_data["branch"] if !haskey(branch,"feeder")]
+    [net_data["bus"][id]["feeder"] = "HV/MV" for (id,bus) in net_data["bus"] if !haskey(bus,"feeder")]
+
+    net_data["load"] = Dict()
+
+    return net_data
+    
+end
+
 #Plot network with branch loading
 # node_attribute can be either: "p_flex",  "q_flex", "vm", "flex_type","basic" 
 # gen_attribute can be either: "pg", "curtailment", "qg", "basic"
@@ -977,11 +1378,12 @@ function mn_plot_grid(case::Dict, node_attribute::String, gen_attribute::String,
 
     # copy data for modification by plots
     data = deepcopy(case)
+    data = add_corall_prop(data, nwid)
 
     # what components to display
     show_components = ["bus", "branch", "gen"]
 
-    prop_node, prop_gen, prop_br = dict_of_proprieties(data, node_attribute, gen_attribute, branch_attribute)
+    prop_node, prop_gen, prop_br = mn_dict_of_proprieties(data, node_attribute, gen_attribute, branch_attribute)
 
     plot = powerplot(data, 
                     show_flow = display_flow,
@@ -1007,7 +1409,7 @@ function mn_plot_grid(case::Dict, node_attribute::String, gen_attribute::String,
     )
 
     # BRANCH
-    if branch_attribute != "basic"
+    if !(branch_attribute in ["basic", "corall"])
         #plot.layer[1]["layer"][1]["encoding"]["color"]["field"]="branch_Percent_Loading"
         plot.layer[1]["layer"][1]["encoding"]["color"]["legend"]= Dict("orient"=>"bottom-right")
         plot.layer[1]["layer"][1]["encoding"]["color"]["title"]= prop_br[:title]
@@ -1018,7 +1420,7 @@ function mn_plot_grid(case::Dict, node_attribute::String, gen_attribute::String,
     end
 
     # BUS
-    if !(node_attribute in ["basic", "flex_type"])
+    if !(node_attribute in ["basic", "flex_type", "corall"])
         plot.layer[3]["encoding"]["color"]["legend"]= Dict("orient"=>"bottom-right", "offset" => -30)
         plot.layer[3]["encoding"]["color"]["title"]= prop_node[:title]
         plot.layer[3]["encoding"]["color"]["scale"]["domain"]= prop_node[:range]
@@ -1026,7 +1428,7 @@ function mn_plot_grid(case::Dict, node_attribute::String, gen_attribute::String,
     end
         
     # GEN
-    if gen_attribute != "basic"
+    if !(gen_attribute in ["basic", "corall"])
         #plot.layer[4]["encoding"]["color"]["field"]="gen_Percent_Loading"
         plot.layer[4]["encoding"]["color"]["legend"] = Dict("orient"=>"bottom-right", "offset" => -60)
         plot.layer[4]["encoding"]["color"]["title"] = prop_gen[:title]
@@ -1038,7 +1440,14 @@ function mn_plot_grid(case::Dict, node_attribute::String, gen_attribute::String,
     @set! plot.resolve.scale.size=:independent
     network = uppercasefirst(replace(data["name"],"matpower_"=>""))
     @set! plot.title = network*" Grid Plot"
-    #@set! plot.resolve.scale.color=:shared
+    
+    if branch_attribute == "corall"
+        @set! plot.resolve.scale.color=:shared
+        plot.layer[1]["layer"][1]["encoding"]["color"]["title"]="Feeders"
+        plot.layer[1]["layer"][1]["encoding"]["color"]["legend"]=Dict("clipHeight"=>50, "type" => "symbol", "labelFontSize"=>10, "symbolType" => "circle", "symbolSize" => 1000)
+        plot.layer[1]["layer"][1]["encoding"]["color"]["scale"]["range"] = prop_br[:color_range]
+    end
+    
 
     if zoom
         PowerPlots.Experimental.add_zoom!(plot)
@@ -1048,13 +1457,27 @@ function mn_plot_grid(case::Dict, node_attribute::String, gen_attribute::String,
         save(save_path*"Grid_plot_mn$nwid.html", plot)
     end
 
-    plot
-
     return plot
 
 end
 
-function dict_of_proprieties(data::Dict, node::String, gen::String, branch::String)
+function corall_checks(data::Dict)
+    n_feeders = []
+    n_feeders = length([push!(n_feeders,branch["feeder"]) for (id,branch) in data["branch"] if !(branch["feeder"] in n_feeders)])
+    
+    file_name = data["name"]
+    title  = uppercasefirst(replace(file_name, "matpower_"=>""))
+    
+    if title != "Semiurban"
+        color_range = colorscheme2array(ColorSchemes.colorschemes[:tableau_10])[1:n_feeders]
+    else
+        color_range = colorscheme2array(ColorSchemes.colorschemes[:tableau_20])[1:n_feeders]
+    end
+
+    return color_range
+end
+
+function mn_dict_of_proprieties(data::Dict, node::String, gen::String, branch::String)
     
     dict_node = Dict{String, Dict}()
     dict_gen = Dict{String, Dict}()
@@ -1067,7 +1490,7 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
     f_p_max, f_p_min = dict_find_new(data, "bus", "p_flex")
     f_q_max, f_q_min = dict_find_new(data, "bus", "q_flex")
     v_max, v_min = dict_find_new(data, "bus", "vm")
-    curt_max, min = dict_find_new(data, "gen", "curtailment")
+    curt_max, min = dict_find_new(data, "gen", "curtail_%")
     pg_max, pg_min = dict_find_new(data, "gen", "pg")
     qg_max, qg_min = dict_find_new(data, "gen", "qg")
     b_l_max, b_l_min = dict_find_new(data, "branch", "loading")
@@ -1075,6 +1498,7 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
     q_loss_max, min= dict_find_new(data, "branch", "q_loss")
     p_f_max = dict_find_new(data, "branch", "pf")
 
+    c_range = corall_checks(data)
 
     # Attributes for nodes (bus)
     if f_p_min >=0
@@ -1134,6 +1558,7 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
             :color_range => colorscheme2array(ColorSchemes.colorschemes[:PiYG_10]),  #pink - green       
         )
     end
+    
     dict_node["vm"] = Dict{Symbol, Any}(
         :bus_size => bus_size,
         :bus_data => "vm",
@@ -1154,6 +1579,13 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
         :bus_data_type => "nominal",
         :color_range => "#C0C0C0" #"#228b22"  #ForestGreen
     )
+    dict_node["corall"] = Dict{Symbol, Any}(
+        :bus_size => 15,
+        :bus_data => "feeder",
+        :bus_data_type => "nominal",
+        :color_range => c_range
+    )
+
 
     # Attributes for gen
     dict_gen["pg"] = Dict{Symbol, Any}(
@@ -1174,7 +1606,7 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
     )
     dict_gen["curtailment"] = Dict{Symbol, Any}(
         :gen_size => gen_size,
-        :gen_data => "curtailment",
+        :gen_data => "curtail_%",
         :gen_data_type => "quantitative",
         :range => [0,curt_max],
         :title => "DG Curtailment (%)",
@@ -1186,13 +1618,20 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
         :gen_data_type => "nominal",
         :color_range => "purple"
     )
+    dict_gen["corall"] = Dict{Symbol, Any}(
+        :gen_size => 100,
+        :gen_data => "ComponentType",
+        :gen_data_type => "nominal",
+        :color_range => "black"
+    )
 
     # Attributes for branch
     dict_branch["loading"] = Dict{Symbol, Any}(
         :branch_size => branch_size,
         :branch_data => "loading",
         :branch_data_type => "quantitative",
-        :range => [0,b_l_max],
+        #:range => [0,b_l_max],
+        :range => [0,100],
         :title => "Branch loading (%)",
         :color_range => ["green","orange","red"],
     )
@@ -1225,6 +1664,12 @@ function dict_of_proprieties(data::Dict, node::String, gen::String, branch::Stri
         :branch_data => "ComponentType",
         :branch_data_type => "nominal",
         :color_range => "#87cefa" # lightskyblue #00BFF" #deepSkyBlue
+    )
+    dict_branch["corall"] = Dict{Symbol, Any}(
+        :branch_size => 4,
+        :branch_data => "feeder",
+        :branch_data_type => "nominal",
+        :color_range => c_range
     )
 
     return dict_node[node],dict_gen[gen], dict_branch[branch]
@@ -1316,8 +1761,6 @@ function find_max_min_voltage(volt_prof::Dict)
 
     for (nwid,net) in volt_prof
 
-        hour = string(parse(Int64,nwid)-1)
-
         mock = Dict{Int64, Any}(feeder_id => Dict() for feeder_id in keys(net))
 
         for (f_id, feeder) in net
@@ -1330,7 +1773,7 @@ function find_max_min_voltage(volt_prof::Dict)
 
         end
 
-        max_min_volt[hour] = mock
+        max_min_volt[nwid] = mock
 
     end
 
@@ -1365,7 +1808,6 @@ function mn_calc_curtailment(data::Dict, result::Dict, DG_prod_hours::Vector)
 
         for (i, gen) in result["solution"]["nw"][nwid]["gen"]
             if i!="1"
-                f_name = gen_ID[i]["feeder"]
                 p_ref = data["nw"][nwid]["gen"][i]["pg_ref"]
                 p_final = gen["pg"]
                 curtail = p_ref - p_final
@@ -1394,24 +1836,28 @@ end
 function find_absolute_max_min_voltage(max_min_volt::Dict)
 
     reference = Dict{Int64, Dict}(f_id => Dict() for f_id in keys(max_min_volt["0"]))
+    vmax = Dict{Int64, Float64}()
+    vmin = Dict{Int64, Float64}()
 
-    for (f_id, data) in max_min_volt["1"]
-        reference[f_id]["vmax"] = round(data["v_max"], digits=4)
-        reference[f_id]["vmin"] = round(data["v_min"], digits=4)
-        reference[f_id]["hour_vmax"] = "1"
-        reference[f_id]["hour_vmin"] = "1"
+    for f_id in keys(max_min_volt["0"])
+        hr_max = reduce((x,y) -> max_min_volt[x][f_id]["v_max"] > max_min_volt[y][f_id]["v_max"] ? x : y, keys(max_min_volt))
+        hr_min = reduce((x,y) -> max_min_volt[x][f_id]["v_min"] < max_min_volt[y][f_id]["v_min"] ? x : y, keys(max_min_volt))
+        reference[f_id]["vmax"] = round(max_min_volt[hr_max][f_id]["v_max"], digits = 4)
+        reference[f_id]["vmin"] = round(max_min_volt[hr_min][f_id]["v_min"], digits = 4)
+        reference[f_id]["hour_vmax"] = []
+        reference[f_id]["hour_vmin"] = []
+
     end
 
     for (hour, volt) in max_min_volt
 
         for (f_id, data) in volt
-            if data["v_max"]> reference[f_id]["vmax"]
-                reference[f_id]["vmax"] = round(data["v_max"], digits = 4)
-                reference[f_id]["hour_vmax"] = hour
+            
+            if round(data["v_max"], digits = 4) == reference[f_id]["vmax"]
+                push!(reference[f_id]["hour_vmax"], hour)
             end  
-            if data["v_min"] < reference[f_id]["vmin"]
-                reference[f_id]["vmin"] = round(data["v_min"], digits = 4)
-                reference[f_id]["hour_vmin"] = hour
+            if round(data["v_min"], digits = 4) == reference[f_id]["vmin"]
+                push!(reference[f_id]["hour_vmin"], hour)
             end
         end
             
@@ -1421,22 +1867,15 @@ function find_absolute_max_min_voltage(max_min_volt::Dict)
 end
 
 # save hours of production for PV
-function find_production_hours(pv_profile::Vector)
-    production_hours = Vector{Int64}()
-    for (hour, pn) in enumerate(pv_profile)
-        hour -= 1  # Hour counting should start from midnight, not from 1 am (first value assigned from enumerate is 1, not 0)
-        if pn!=0.0
-            push!(production_hours, hour)
-        end
-    end
-    return production_hours
+function find_production_hours(pv_profile::DataFrame)
+    return pv_profile[pv_profile[!,2].>.0, :time]
 end
 
 function mn_find_production_hours(pv_profiles::Tuple, day::Int64)  # Different version to take into account different production profiles
     prod_h_max = Vector() 
 
     for profile_df in pv_profiles
-        profile = profile_df[!, "PV_Profile_$day"]  #dont consider first column which corresponds to time column 
+        profile = profile_df[!, ["time","PV_Profile_$day"]]
         
         prod_h = find_production_hours(profile)
 
@@ -1560,7 +1999,7 @@ end
 
 function update_columns(df::DataFrame, PMD::PowerModelsDataFrame, prop_to_show::Vector{String}, idx::Int64)
 
-    for prop in prop_to_show
+    for prop in prop_to_show #creates df with proprieties to show row by row
         df[idx, prop] = calc_hourly_stuff(PMD, prop)
     end
 
@@ -1571,10 +2010,10 @@ function convert_to_single_df(df::DataFrame, sim_periods::Int)
     type = []
     for col_name in filter(x -> x!= "hour", names(df))
         power = vcat(power, df[!,col_name])
-        type =  vcat(type,reduce(vcat, [col_name for i in 1:sim_periods]))
+        type =  vcat(type,reduce(vcat, [col_name for i in 0:sim_periods]))
     end
 
-    hours = repeat(1:sim_periods,length(filter(x -> x!= "hour", names(df))))
+    hours = repeat(0:sim_periods,length(filter(x -> x!= "hour", names(df))))
 
     return DataFrame(power = power, type = type, hour = hours)
 end
@@ -1597,6 +2036,9 @@ function mn_plot_cumulative_daily_profile(r_day::Int64, sim_periods::Int64, data
 
         update_columns(df, PMD, proprieties_to_show, idx)
     end
+
+    push!(df,df[1,:])
+    df[end,:hour] = sim_periods
     
     data_df = convert_to_single_df(df, sim_periods)
     
@@ -1622,6 +2064,13 @@ function mn_plot_cumulative_daily_profile(r_day::Int64, sim_periods::Int64, data
     ) |> display
     
 end
+
+
+
+###############################
+###### HEAT MAP FUNCTIONS #####
+###############################
+
 
 # Identify max gen min load hour and min gen max load hour 
 function critical_hour_max_gen_min_load(data::Dict)
@@ -1734,4 +2183,53 @@ function find_most_congested_hour(r_cong_h, o_cong_h, simulation_periods)
         index[i] = v
     end
     return findmax(index)[2]   
+end
+
+# Compute the voltage sensitivity of a node/s for a variation in the power injection in that same node 
+function calc_volt_ptdf(data::Dict, res_1::Dict, bus::Vector, var::Float64)
+
+    function sensitivity_1(net::Dict, res_1::Dict, bus_id::Int64, var::Float64)  #sensitivity obtained by adding gen
+
+        add_single_generator(net, var, bus_id)
+
+        println(keys(net["gen"]))
+        net["per_unit"] = true
+
+        pm = PowerModels.instantiate_model(net, ACPPowerModel, no_flex_with_DG) #build_mn_pf_DR_DGC
+        res_2 = optimize_model!(pm, optimizer=JuMP.optimizer_with_attributes(Ipopt.Optimizer, "print_level"=>0), solution_processors=[])
+        update_data!(net, res_2["solution"])
+
+        return (res_2["solution"]["bus"]["$bus_id"]["vm"] - res_1["bus"]["$bus_id"]["vm"])/var
+    
+    end
+    function sensitivity_2(net::Dict, ref::Dict,res_1::Dict, bus_id::Int64, var::Float64)  #sensitivity obtained by modifying load
+
+        bus = ref[:bus_loads][bus_id][1] 
+        if var > 0
+            net["load"]["$bus"]["pd"]-= var
+        else
+            net["load"]["$bus"]["pd"]+= var
+        end
+
+        net["per_unit"] = true
+        res_2 = solve_ac_pf(net, JuMP.optimizer_with_attributes(Ipopt.Optimizer, "print_level"=>0))
+        update_data!(net, res_2["solution"])
+
+        return (res_2["solution"]["bus"]["$bus_id"]["vm"] - res_1["bus"]["$bus_id"]["vm"])/var
+    
+    end
+
+    ptdf = Dict{Int64,Float64}()
+    ref = PowerModels.build_ref(data)[:it][:pm][:nw][0]
+
+    for b in bus
+
+        net = deepcopy(data)
+        
+        #push!(ptdf, b  => sensitivity_1(net, res_1, b,var))
+        push!(ptdf, b  => sensitivity_2(net, ref, res_1, b,var))
+
+    end
+
+    return ptdf
 end

@@ -1,0 +1,28 @@
+simulation_periods : 24 
+
+#Flexibility 
+DR : false
+flex : 20           # DR flexibility
+
+DGC : true
+curtailment : 20    # DG flexibility 
+
+
+# Line constraints
+congestion_limit : 100
+threshold : 0
+
+# DG placement
+random_gen_assignment : false        # if true, gen are assigned to random nodes. Else, candidate nodes for DGs must be specified 
+multiple_gen : false                      # If true, gen_number_per_feeder generator/s are assigned in each feeder at the same time                
+size : 4                              # size of generator/s
+seed : 99                              # seed for random DG buses choice
+gen_number_per_feeder : 2              # number of random DGs per feeder
+gen_locations : ["Ispra"]
+
+# Load placement
+load_locations : ["Chiara"]
+
+# Branch loading parameters 
+α : 70.0      # (%) loading limit for critical branches
+β : 300        # (hours) limit to determine color of critical branch (β<300--> ORANGE, β>300 --> RED) 
